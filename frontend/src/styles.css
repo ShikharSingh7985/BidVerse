@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --color-canvas: #f5f6fa;
+  --color-ink: #172033;
+  --color-muted: #56637a;
+  --color-line: #e3e7ef;
+  --color-sidebar: #141b2e;
+  --color-sidebar-line: #2a334b;
+  --color-sidebar-muted: #b3bfd6;
+  --color-sidebar-active: #292e50;
+  --color-accent: #5144ce;
+  --color-accent-strong: #4235b5;
+  --color-accent-soft: #eeebfd;
+}
+
+@layer base {
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+  }
+
+  body:has(dialog:modal) {
+    overflow: hidden;
+  }
+
+  :focus-visible {
+    outline: 2px solid #7e71ec;
+    outline-offset: 3px;
+  }
+}
