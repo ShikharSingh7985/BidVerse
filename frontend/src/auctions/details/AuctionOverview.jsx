@@ -79,7 +79,7 @@ function ClosingTime({ title, timestamp, icon: Icon }) {
   );
 }
 
-export default function AuctionOverview({ rfq, clockOffset, onBoundary }) {
+export default function AuctionOverview({ rfq, clockOffset, onBoundary, bidHistory }) {
   const [now, setNow] = useState(Date.now);
   const closed = rfq.status === 'closed' || rfq.status === 'force_closed';
   const serverNow = now + clockOffset;
@@ -126,6 +126,7 @@ export default function AuctionOverview({ rfq, clockOffset, onBoundary }) {
         rfq={rfq}
         clockOffset={clockOffset}
         blockReason={getBiddingBlockReason(rfq, serverNow)}
+        bidHistory={bidHistory}
       />
     </>
   );

@@ -115,7 +115,7 @@ def test_rankings_use_latest_valid_bids_and_preserve_history(client, auction, bi
 
     early_bid_at = CLOSE - TRIGGER_WINDOW - timedelta(minutes=1)
     bid_clock(early_bid_at)
-    first_a = post_bid(client, rfq_id, quote(supplier_a, "45.00"))
+    first_a = post_bid(client, rfq_id, quote(supplier_a, "90.00"))
     bid_b = post_bid(client, rfq_id, quote(supplier_b, "70.00"))
     bid_c = post_bid(client, rfq_id, quote(supplier_c, "80.00"))
     expires = NOW + timedelta(seconds=30)
@@ -131,18 +131,66 @@ def test_rankings_use_latest_valid_bids_and_preserve_history(client, auction, bi
     assert datetime.fromisoformat(latest_a["submitted_at"]) == early_bid_at + timedelta(seconds=1)
     bid_clock(expires)
     assert [entry["bid_id"] for entry in client.get(rankings_url).json()] == [
-        first_a["id"], bid_b["id"], bid_c["id"]
+        bid_b["id"], bid_c["id"], first_a["id"]
     ]
     bid_clock(VALID_UNTIL)
     assert client.get(rankings_url).json() == []
     assert [bid["id"] for bid in client.get(history_url).json()] == [
-        first_a["id"], bid_b["id"], latest_a["id"], bid_c["id"]
+        bid_b["id"], latest_a["id"], bid_c["id"], first_a["id"]
     ]
     logged = connection.execute(
         select(AuctionActivity.bid_id, AuctionActivity.event_type).where(AuctionActivity.rfq_id == rfq_id)
     ).all()
     assert set(logged) == {(bid["id"], "bid_submitted") for bid in [first_a, bid_b, bid_c, latest_a]}
     assert current_close(client, rfq_id) == CLOSE
+
+
+@pytest.mark.parametrize(
+    ("origin_charge", "expected_status"), [("3.09", 201), ("3.10", 422), ("3.11", 422)]
+)
+def test_revision_compares_all_charges_and_rejects_without_side_effects(
+    client, auction, bid_clock, connection, origin_charge, expected_status
+):
+    rfq_id, _, (supplier_id, other_supplier, _) = auction
+    url = f"/rfqs/{rfq_id}/bids"
+    first = post_bid(client, rfq_id, quote(supplier_id, "100.00"))
+    before = current_close(client, rfq_id)
+    submission = quote(supplier_id, "99.00")
+    submission["origin_charge"] = origin_charge
+    response = client.post(url, json=submission)
+
+    assert response.status_code == expected_status, response.text
+    if expected_status == 201:
+        revision = response.json()
+        assert revision["total_price"] == "105.29"
+        assert client.get(url).json() == [revision, first]
+        assert current_close(client, rfq_id) == before + EXTENSION
+    else:
+        detail = response.json()["detail"]
+        assert detail["code"] == "bid_total_not_lower"
+        assert "lower than your previous accepted bid" in detail["message"]
+        assert detail["previous_total"] == first["total_price"]
+        assert client.get(url).json() == [first]
+        assert current_close(client, rfq_id) == before
+        assert len(extension_events(connection, rfq_id)) == 1
+        assert [entry["bid_id"] for entry in client.get(f"/rfqs/{rfq_id}/activity").json()] == [
+            first["id"], first["id"],
+        ]
+
+    first_for_other_supplier = post_bid(client, rfq_id, quote(other_supplier, "120.00"))
+    assert first_for_other_supplier["total_price"] == "125.30"
+
+
+def test_revision_uses_the_last_accepted_bid_even_after_it_expires(client, auction, bid_clock):
+    rfq_id, _, (supplier_id, *_) = auction
+    post_bid(client, rfq_id, quote(supplier_id, "100.00"))
+    expires = NOW + timedelta(seconds=1)
+    last = post_bid(client, rfq_id, quote(supplier_id, "80.00", valid_until=expires))
+    bid_clock(expires)
+    response = client.post(f"/rfqs/{rfq_id}/bids", json=quote(supplier_id, "90.00"))
+    assert response.status_code == 422
+    assert response.json()["detail"]["previous_total"] == last["total_price"]
+    post_bid(client, rfq_id, quote(supplier_id, "79.00"))
 
 
 def test_bid_acceptance_uses_start_and_current_close(client, auction, bid_clock, connection):
@@ -156,7 +204,7 @@ def test_bid_acceptance_uses_start_and_current_close(client, auction, bid_clock,
     bid_clock(CLOSE)
     assert client.post(url, json=payload).status_code == 409
     connection.execute(update(RFQ).where(RFQ.id == rfq_id).values(current_close_at=FORCED_CLOSE))
-    post_bid(client, rfq_id, payload)
+    post_bid(client, rfq_id, quote(supplier_id, "90.10"))
     bid_clock(FORCED_CLOSE)
     assert client.post(url, json=payload).status_code == 409
     assert len(client.get(url).json()) == 2
@@ -170,12 +218,12 @@ def test_rfq_listing_gets_current_lowest_bids_with_one_query(client, auction, bi
         session.commit()
 
     bid_clock(NOW - timedelta(minutes=8))
-    original = post_bid(client, rfq_id, quote(supplier_a, "20.00"))
+    post_bid(client, rfq_id, quote(supplier_a, "60.00"))
     leader = post_bid(client, rfq_id, quote(supplier_b, "50.00"))
     other_bid = post_bid(client, other_id, quote(supplier_a, "10.00"))
     bid_clock(NOW - timedelta(minutes=7))
     expiry = NOW + timedelta(seconds=1)
-    post_bid(client, rfq_id, quote(supplier_a, "60.00", valid_until=expiry))
+    revision = post_bid(client, rfq_id, quote(supplier_a, "20.00", valid_until=expiry))
     bid_clock(NOW)
     monkeypatch.setitem(app.dependency_overrides, get_server_time, lambda: NOW)
 
@@ -194,12 +242,12 @@ def test_rfq_listing_gets_current_lowest_bids_with_one_query(client, auction, bi
     assert response.status_code == 200, response.text
     assert len(queries) == 1
     listing = {row["id"]: row["lowest_bid"] for row in response.json()}
-    assert listing[rfq_id] == leader["total_price"]
+    assert listing[rfq_id] == revision["total_price"]
     assert listing[other_id] == other_bid["total_price"]
     assert listing[empty_id] is None
     assert client.get(f"/rfqs/{rfq_id}/rankings").json()[0]["total_price"] == listing[rfq_id]
 
-    for at, expected in [(expiry, original["total_price"]), (VALID_UNTIL, None)]:
+    for at, expected in [(expiry, leader["total_price"]), (VALID_UNTIL, None)]:
         monkeypatch.setitem(app.dependency_overrides, get_server_time, lambda: at)
         listing = {row["id"]: row["lowest_bid"] for row in client.get("/rfqs").json()}
         assert listing[rfq_id] == expected
@@ -332,8 +380,8 @@ def test_any_bid_extends_at_window_start_and_window_moves(client, auction, bid_c
     assert current_close(client, rfq_id) == CLOSE
 
     bid_clock(window_start)
-    triggering_bid = post_bid(client, rfq_id, quote(supplier_id))
-    post_bid(client, rfq_id, quote(supplier_id))
+    triggering_bid = post_bid(client, rfq_id, quote(supplier_id, "90.00"))
+    post_bid(client, rfq_id, quote(supplier_id, "80.00"))
     assert current_close(client, rfq_id) == CLOSE + EXTENSION
     assert extension_events(connection, rfq_id) == [
         (triggering_bid["id"], ExtensionTrigger.BID_RECEIVED, CLOSE, CLOSE + EXTENSION)
@@ -394,15 +442,15 @@ def test_repeated_extensions_stop_at_forced_close(client, auction, bid_clock, co
     connection.execute(update(RFQ).where(RFQ.id == rfq_id).values(forced_close_at=forced_close))
     expected_events = []
     close = CLOSE
-    for next_close in (CLOSE + EXTENSION, CLOSE + 2 * EXTENSION, forced_close):
+    for next_close, freight in zip((CLOSE + EXTENSION, CLOSE + 2 * EXTENSION, forced_close), ("100", "90", "80")):
         bid_clock(close - timedelta(microseconds=1))
-        bid = post_bid(client, rfq_id, quote(supplier_id))
+        bid = post_bid(client, rfq_id, quote(supplier_id, freight))
         assert current_close(client, rfq_id) == next_close
         expected_events.append((bid["id"], ExtensionTrigger.BID_RECEIVED, close, next_close))
         close = next_close
 
     bid_clock(forced_close - timedelta(microseconds=1))
-    post_bid(client, rfq_id, quote(supplier_id))
+    post_bid(client, rfq_id, quote(supplier_id, "70"))
     assert current_close(client, rfq_id) == forced_close
     for rejected_at in (forced_close, forced_close + timedelta(microseconds=1)):
         bid_clock(rejected_at)
@@ -442,7 +490,7 @@ def concurrent_auction(monkeypatch):
     try:
         Base.metadata.create_all(test_engine)
         with Session(test_engine) as session, session.begin():
-            rfq_id, _, (supplier_id, *_) = create_auction(session)
+            rfq_id, _, suppliers = create_auction(session)
 
         def test_session():
             with Session(test_engine, expire_on_commit=False) as session:
@@ -450,30 +498,31 @@ def concurrent_auction(monkeypatch):
 
         monkeypatch.setitem(app.dependency_overrides, get_session, test_session)
         with TestClient(app) as client:
-            yield client, test_engine, rfq_id, supplier_id
+            yield client, test_engine, rfq_id, suppliers
     finally:
         with engine.begin() as connection:
             connection.execute(DropSchema(schema, cascade=True))
 
 
 def test_concurrent_submissions_keep_both_bids_and_chain_extensions(concurrent_auction, bid_clock):
-    client, test_engine, rfq_id, supplier_id = concurrent_auction
+    client, test_engine, rfq_id, (supplier_a, supplier_b, _) = concurrent_auction
     barrier = Barrier(2)
 
-    def submit(freight):
+    def submit(supplier_id, freight):
         barrier.wait(timeout=5)
         return post_bid(client, rfq_id, quote(supplier_id, freight))
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(submit, "80.00")
-        second = pool.submit(submit, "70.00")
-        accepted_ids = {first.result(timeout=10)["id"], second.result(timeout=10)["id"]}
+        first = pool.submit(submit, supplier_a, "80.00")
+        second = pool.submit(submit, supplier_b, "70.00")
+        first_id, second_id = first.result(timeout=10)["id"], second.result(timeout=10)["id"]
+        accepted_ids = {first_id, second_id}
 
     history = client.get(f"/rfqs/{rfq_id}/bids").json()
     assert len(history) == 2
     assert {bid["id"] for bid in history} == accepted_ids
     ranks = client.get(f"/rfqs/{rfq_id}/rankings").json()
-    assert [rank["bid_id"] for rank in ranks] == [max(accepted_ids)]
+    assert [rank["bid_id"] for rank in ranks] == [second_id, first_id]
     assert current_close(client, rfq_id) == CLOSE + 2 * EXTENSION
     with test_engine.connect() as connection:
         first_id, second_id = sorted(accepted_ids)
@@ -485,9 +534,32 @@ def test_concurrent_submissions_keep_both_bids_and_chain_extensions(concurrent_a
         assert set(connection.scalars(submissions)) == accepted_ids
 
 
+def test_concurrent_equal_revisions_accept_only_one(concurrent_auction, bid_clock):
+    client, test_engine, rfq_id, (supplier_id, *_) = concurrent_auction
+    first = post_bid(client, rfq_id, quote(supplier_id, "100.00"))
+    url = f"/rfqs/{rfq_id}/bids"
+    barrier = Barrier(2)
+
+    def revise():
+        barrier.wait(timeout=5)
+        return client.post(url, json=quote(supplier_id, "90.00"))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        requests = [pool.submit(revise) for _ in range(2)]
+        accepted, rejected = sorted((request.result(timeout=10) for request in requests), key=lambda r: r.status_code)
+
+    assert (accepted.status_code, rejected.status_code) == (201, 422)
+    revision = accepted.json()
+    assert rejected.json()["detail"]["previous_total"] == revision["total_price"]
+    assert client.get(url).json() == [revision, first]
+    assert current_close(client, rfq_id) == CLOSE + 2 * EXTENSION
+    with test_engine.connect() as connection:
+        assert [event.bid_id for event in extension_events(connection, rfq_id)] == [first["id"], revision["id"]]
+
+
 @pytest.mark.parametrize("deadline_extended", [False, True])
 def test_bid_waiting_on_lock_rechecks_time_and_deadline(concurrent_auction, bid_clock, deadline_extended):
-    client, test_engine, rfq_id, supplier_id = concurrent_auction
+    client, test_engine, rfq_id, (supplier_id, *_) = concurrent_auction
     lock_attempted = Event()
 
     def observe_lock(connection, cursor, statement, parameters, context, executemany):

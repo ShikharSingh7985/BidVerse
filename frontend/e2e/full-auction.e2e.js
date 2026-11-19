@@ -31,7 +31,7 @@ async function createRfq(page, start) {
   return response.json();
 }
 
-async function submitQuote(page, { supplier, carrier, freight, validUntil }) {
+async function fillQuote(page, { supplier, carrier, freight, validUntil }) {
   await page.getByLabel('Supplier', { exact: true }).selectOption({ index: supplier });
   await page.getByLabel('Carrier name').fill(carrier);
   await page.getByLabel('Transit time (days)').fill('3');
@@ -40,7 +40,10 @@ async function submitQuote(page, { supplier, carrier, freight, validUntil }) {
   await page.getByLabel('Destination charges').fill('2.50');
   await page.getByLabel('Quote valid until').fill(validUntil);
   await expect(page.getByLabel('Calculated total')).toHaveText(usd.format(freight + 10));
+}
 
+async function submitQuote(page, quote) {
+  await fillQuote(page, quote);
   const submission = page.waitForResponse((response) => (
     response.url().endsWith('/bids') && response.request().method() === 'POST'
   ));
@@ -103,6 +106,12 @@ test('two browser sessions see bid revisions, extensions and the forced close', 
       await expect(rankings.nth(2)).toContainText('USD 9,999,999,999.00');
       expect(await observer.evaluate(() => document.documentElement.scrollWidth)).toBe(320);
       await expect(currentClose).toHaveAttribute('datetime', originalClose);
+
+      await fillQuote(buyer, { supplier: 2, carrier: 'Beacon equal revision', freight: 240, validUntil });
+      await expect(buyer.getByText(/Previous accepted total.*250\.00/)).toBeVisible();
+      await buyer.getByRole('button', { name: 'Submit quote' }).click();
+      await expect(buyer.getByText(/lower than your previous accepted bid/)).toBeVisible();
+      await expect(buyer.getByText(/Quote submitted successfully/)).toHaveCount(0);
 
       const cedar = await submitQuote(buyer, { supplier: 3, carrier: 'Cedar revised', freight: 215, validUntil });
       await expect.poll(() => updates.find((message) => message.bid_id === cedar.id)?.events)

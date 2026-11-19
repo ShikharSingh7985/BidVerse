@@ -50,7 +50,7 @@ def submit_bid(
 ) -> BidRead:
     deadline_extended = False
     with session.begin():
-        # Serialize submissions for this RFQ before checking the current deadline.
+        # Serialize submissions before checking the deadline and the supplier's last accepted total.
         rfq = require_rfq(session, rfq_id, lock=True)
         configuration = rfq.auction_configuration
         if configuration is None:
@@ -72,6 +72,23 @@ def submit_bid(
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="valid_until must be after the server submission time",
+            )
+
+        previous_total = session.scalar(
+            select(Bid.total_price)
+            .where(Bid.rfq_id == rfq_id, Bid.supplier_id == supplier.id)
+            .order_by(Bid.id.desc())
+            .limit(1)
+        )
+        total = payload.freight_charge + payload.origin_charge + payload.destination_charge
+        if previous_total is not None and total >= previous_total:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "bid_total_not_lower",
+                    "message": "The new quote total must be lower than your previous accepted bid.",
+                    "previous_total": f"{previous_total:.2f}",
+                },
             )
 
         extension = _available_extension(rfq, configuration, submitted_at)

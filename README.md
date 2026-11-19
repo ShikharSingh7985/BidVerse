@@ -114,12 +114,13 @@ The command creates two demo buyers, three demo suppliers, and a fresh batch of 
 1. Open **New RFQ** and choose a demo buyer. Use a unique reference ID, a bid start in the past, a future initial close, and a later forced close. Set a future service date and leave British Auction enabled. Create the RFQ and confirm it opens on the auction details page.
 2. Open the same auction details URL in a second browser window or profile. Wait for **Live updates** in both. Use one of the seeded auctions above, or use the RFQ you created with the corresponding trigger and a window that covers the current time.
 3. In the first session, submit quotes using the demo suppliers. Enter a carrier, the freight, origin and destination charges, transit days, and a validity time beyond the deadline. Verify that the second session updates its rankings, bid history, current deadline, and activity log without a reload. Expand a history entry to inspect its quote details.
-4. To demo the forced close quickly, run the seed command again with `--quick` and open the newly printed **Any bid** auction. Its initial deadline is one minute after seeding, the forced close is three minutes after seeding, and each accepted quote adds one minute. Submit at least two bids in time to move the current deadline to the forced deadline. At that deadline, the details show **Force closed** and disable quote submission.
+4. To demo the forced close quickly, run the seed command again with `--quick` and open the newly printed **Any bid** auction. Its initial deadline is one minute after seeding, the forced close is three minutes after seeding, and each accepted quote adds one minute. Submit two bids from different suppliers or submit a lower revision from the same supplier to reach the forced deadline. At that deadline, the details show **Force closed** and disable quote submission.
 
 ## Auction rules
 
 - The RFQ schedule requires `bid start < initial close < forced close`. The current close starts at the initial close. The server accepts bids from the start instant up to the current close, exclusive. If the current close reaches the forced deadline, closing at that instant results in **Force closed**. An RFQ that closes earlier keeps **Closed** status.
-- Every accepted revision stays in bid history. The latest unexpired quote represents each supplier, even if a previous quote had a lower total. If it expires, an older still-valid quote can rank. Rankings and the lowest bid use the total of freight, origin, and destination charges. Ties favor the earlier submission, then the smaller bid ID.
+- A supplier’s first bid needs only to meet the standard quote rules. Each revision must have a strictly lower total than that supplier’s last accepted bid for the same RFQ, even if the previous quote has expired. The total includes freight, origin, and destination charges. An equal or higher revision leaves bid history, rankings, activity, and the deadline unchanged.
+- Every accepted revision stays in bid history. Rankings and the lowest bid use each supplier’s latest unexpired quote. If it expires, an older still-valid quote can rank. Ties favor the earlier submission, then the smaller bid ID.
 - A qualifying bid in the last X minutes adds Y minutes to the current close, capped at the forced close. The window includes its opening instant and moves with each extension. A single transaction saves the bid, deadline change, and activity log before the API sends a WebSocket notification.
 
 | Trigger | When an accepted bid extends the auction |
@@ -157,6 +158,8 @@ Use the [demo seed](#local-demo) to populate the buyer and supplier lists in a f
 | `GET /rfqs/{rfq_id}/rankings` | Show L1, L2, L3 and subsequent positions using one valid quote per supplier. |
 
 For submissions, send `supplier_id`, `carrier_name`, `freight_charge`, `origin_charge`, `destination_charge`, `transit_time_days`, and `valid_until`. Charges support two decimal places and use the RFQ currency. The API returns money values as decimal strings. Quote validity must have a timezone and be later than the server's submission timestamp.
+
+An equal or higher revision returns HTTP 422. Its `detail` contains `code: "bid_total_not_lower"`, a human-readable `message`, and `previous_total` as a decimal string. The server checks the latest accepted total under the same RFQ lock that guards the bid transaction. The quote form shows the previous total when available and refreshes bid history if a concurrent revision is accepted first.
 
 ## Auction activity API
 

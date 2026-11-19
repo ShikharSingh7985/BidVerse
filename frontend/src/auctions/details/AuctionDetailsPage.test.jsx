@@ -113,7 +113,7 @@ async function fillQuote() {
   await screen.findByRole('option', { name: 'Supplier Six (#6)' });
   changeQuote('Supplier', '6');
   changeQuote('Carrier name', ' New Cargo ');
-  changeQuote('Freight charges', '135.00');
+  changeQuote('Freight charges', '85.00');
   changeQuote('Origin charges', '40.00');
   changeQuote('Destination charges', '2.50');
   changeQuote('Transit time (days)', '2');
@@ -322,13 +322,13 @@ it('focuses the first invalid quote field in form order', async () => {
 it('previews the total, submits once, and refreshes all auction data after acceptance', async () => {
   let accepted = false;
   const newBid = {
-    ...bid, id: 13, carrier_name: 'New Cargo', freight_charge: '135.00',
-    origin_charge: '40.00', destination_charge: '2.50', total_price: '177.50',
+    ...bid, id: 13, carrier_name: 'New Cargo', freight_charge: '85.00',
+    origin_charge: '40.00', destination_charge: '2.50', total_price: '127.50',
   };
   const extendedClose = '2031-08-18T12:05:30Z';
   const updatedData = {
     '/rfqs/41': { ...rfq, current_close_at: extendedClose },
-    '/rfqs/41/rankings': [{ ...rankings[0], bid_id: 13, carrier_name: 'New Cargo', total_price: '177.50' }],
+    '/rfqs/41/rankings': [{ ...rankings[0], bid_id: 13, carrier_name: 'New Cargo', total_price: '127.50' }],
     '/rfqs/41/bids': [bid, newBid],
     '/rfqs/41/activity': [...activity, {
       ...activity[1], id: 22, bid_id: 13, previous_close_at: rfq.current_close_at, new_close_at: extendedClose,
@@ -344,7 +344,7 @@ it('previews the total, submits once, and refreshes all auction data after accep
   const post = vi.spyOn(apiClient, 'post').mockReturnValue(pending);
   const view = renderDetails();
   await fillQuote();
-  expect(screen.getByLabelText('Calculated total').textContent).toMatch(/177[.,]50/);
+  expect(screen.getByLabelText('Calculated total').textContent).toMatch(/127[.,]50/);
   expect(await screen.findByText('Deadline extended')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Submit quote' }));
   const saving = await screen.findByRole('button', { name: 'Submitting quote…' });
@@ -354,7 +354,7 @@ it('previews the total, submits once, and refreshes all auction data after accep
   expect(post).toHaveBeenCalledWith('/rfqs/41/bids', {
     supplier_id: 6,
     carrier_name: 'New Cargo',
-    freight_charge: '135.00',
+    freight_charge: '85.00',
     origin_charge: '40.00',
     destination_charge: '2.50',
     transit_time_days: 2,
@@ -375,6 +375,46 @@ it('previews the total, submits once, and refreshes all auction data after accep
   expect(screen.getByLabelText('Freight charges').value).toBe('');
 });
 
+it.each(['90.50', '90.51'])('blocks equal and higher revisions before posting a freight charge of %s', async (freight) => {
+  vi.spyOn(apiClient, 'get').mockImplementation(async (url) => defaultResponses[url]);
+  const post = vi.spyOn(apiClient, 'post');
+  renderDetails();
+  await fillQuote();
+  await screen.findByText(/Previous accepted total/);
+  changeQuote('Freight charges', freight);
+  fireEvent.click(screen.getByRole('button', { name: 'Submit quote' }));
+  expect(await screen.findByRole('alert')).toHaveProperty('textContent',
+    'The new quote total must be lower than your previous accepted bid.');
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Freight charges')));
+  expect(post).not.toHaveBeenCalled();
+  changeQuote('Destination charges', '2.48');
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('refreshes the previous total and retains the quote when a concurrent revision is accepted first', async () => {
+  let revised = false;
+  const get = vi.spyOn(apiClient, 'get').mockImplementation(async (url) => (
+    revised && url === '/rfqs/41/bids'
+      ? { data: [{ ...bid, id: 13, total_price: '120.00' }, bid] }
+      : defaultResponses[url]
+  ));
+  const post = vi.spyOn(apiClient, 'post').mockImplementation(async () => {
+    revised = true;
+    throw { response: { status: 422, data: { detail: { code: 'bid_total_not_lower', previous_total: '120.00' } } } };
+  });
+  renderDetails();
+  await fillQuote();
+  await screen.findByText(/Previous accepted total.*133[.,]00/);
+  fireEvent.click(screen.getByRole('button', { name: 'Submit quote' }));
+  await screen.findByText(/Previous accepted total.*120[.,]00/);
+  expect(await screen.findByText(/lower than your previous accepted bid/)).toBeTruthy();
+  expect(screen.getByLabelText('Freight charges').value).toBe('85.00');
+  expect(get.mock.calls.filter(([url]) => url === '/rfqs/41/bids')).toHaveLength(2);
+  changeQuote('Freight charges', '81.00');
+  fireEvent.click(screen.getByRole('button', { name: 'Submit quote' }));
+  expect(post).toHaveBeenCalledTimes(1);
+});
+
 it('keeps quote inputs after a server rejection and shows the invalid validity field', async () => {
   vi.spyOn(apiClient, 'get').mockImplementation(async (url) => defaultResponses[url]);
   vi.spyOn(apiClient, 'post').mockRejectedValue({
@@ -387,7 +427,7 @@ it('keeps quote inputs after a server rejection and shows the invalid validity f
   const validity = screen.getByLabelText('Quote valid until');
   await waitFor(() => expect(document.activeElement).toBe(validity));
   expect(validity.getAttribute('aria-describedby').split(' ')).toHaveLength(2);
-  expect(screen.getByLabelText('Freight charges').value).toBe('135.00');
+  expect(screen.getByLabelText('Freight charges').value).toBe('85.00');
   expect(screen.getByRole('button', { name: 'Submit quote' }).disabled).toBe(false);
 });
 

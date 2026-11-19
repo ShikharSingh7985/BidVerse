@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { getBiddingBlockReason, getQuoteCharges, initialQuoteForm, validateQuote } from './quoteForm.js';
+import { getBiddingBlockReason, getPreviousTotal, getQuoteCharges, initialQuoteForm, validateQuote } from './quoteForm.js';
 
 const suppliers = [{ id: 4, name: 'Air freight' }];
 const time = Date.parse('2031-08-18T03:00:00Z');
@@ -40,6 +40,35 @@ it('preserves cents at the database precision limit', () => {
   });
   expect(charges.errors).toEqual({});
   expect(charges.total).toBe('29999999999.97');
+});
+
+it.each([
+  [undefined, true],
+  ['0.31', true],
+  ['0.30', false],
+  ['0.29', false],
+  ['0.00', false],
+])('validates a quote of 0.30 against previous total %s', (previousTotal, accepts) => {
+  vi.stubEnv('TZ', 'Asia/Kolkata');
+  const { errors, payload } = validateQuote(draft, suppliers, time, previousTotal);
+  if (accepts) {
+    expect(errors).toEqual({});
+    expect(payload).toBeDefined();
+  } else {
+    expect(errors.total).toMatch(/lower than your previous accepted bid/);
+    expect(payload).toBeUndefined();
+  }
+});
+
+it('finds the last accepted total for the selected supplier in price-sorted history', () => {
+  const history = [
+    { id: 4, supplier_id: 7, total_price: '0.20' },
+    { id: 2, supplier_id: 4, total_price: '0.40' },
+    { id: 3, supplier_id: 4, total_price: '0.80' },
+  ];
+  expect(getPreviousTotal(history, '4')).toBe('0.80');
+  expect(getPreviousTotal(history, '7')).toBe('0.20');
+  expect(getPreviousTotal(history, '8')).toBeUndefined();
 });
 
 it('rejects invalid charges, unavailable suppliers, fractional transit, and expired validity', () => {

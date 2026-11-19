@@ -6,10 +6,11 @@ import { auctionTriggers } from '../../rfqs/rfqForm.js';
 import { AuctionTime, formatMoney } from '../display.jsx';
 import DetailsPanel, { DetailValue } from './DetailsPanel.jsx';
 
-function useAuctionResource(rfqId, resource, refreshInterval) {
+export function useAuctionResource(rfqId, resource, refreshInterval, enabled = true) {
   return useQuery({
     queryKey: ['rfqs', rfqId, resource],
     queryFn: (context) => fetchRfqResource(rfqId, resource, context),
+    enabled,
     refetchInterval: refreshInterval,
     retry: false,
   });
@@ -118,9 +119,8 @@ function ActivityLog({ events }) {
   );
 }
 
-export default function AuctionFeeds({ rfqId, currency, refreshInterval }) {
+export default function AuctionFeeds({ rfqId, currency, refreshInterval, bids }) {
   const rankings = useAuctionResource(rfqId, 'rankings', refreshInterval);
-  const bids = useAuctionResource(rfqId, 'bids', refreshInterval);
   const activity = useAuctionResource(rfqId, 'activity', refreshInterval);
 
   return (

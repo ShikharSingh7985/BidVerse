@@ -20,6 +20,7 @@ export const initialQuoteForm = {
 const maxChargeCents = 999_999_999_999;
 const maxInteger = 2 ** 31 - 1;
 const chargeError = 'Enter a nonnegative amount up to 9,999,999,999.99 with at most two decimal places.';
+const revisionError = 'The new quote total must be lower than your previous accepted bid.';
 
 function parseCharge(value) {
   const text = value.trim().replace(',', '.');
@@ -55,8 +56,18 @@ export function getBiddingBlockReason(rfq, now) {
   return null;
 }
 
-export function validateQuote(values, suppliers, now) {
-  const { amounts, errors } = getQuoteCharges(values);
+export function getPreviousTotal(bidHistory, supplierId) {
+  let previousBid;
+  for (const bid of bidHistory) {
+    if (String(bid.supplier_id) === supplierId && (!previousBid || bid.id > previousBid.id)) {
+      previousBid = bid;
+    }
+  }
+  return previousBid?.total_price;
+}
+
+export function validateQuote(values, suppliers, now, previousTotal) {
+  const { amounts, errors, total } = getQuoteCharges(values);
   const supplier = suppliers.find(({ id }) => String(id) === values.supplier_id);
   const carrier = values.carrier_name.trim();
   const transit = Number(values.transit_time_days);
@@ -71,6 +82,9 @@ export function validateQuote(values, suppliers, now) {
   }
   if (validity.error) errors.valid_until = validity.error;
   else if (validity.date.getTime() <= now) errors.valid_until = 'Quote validity must be in the future.';
+  if (total !== null && previousTotal !== undefined && Number(total) >= Number(previousTotal)) {
+    errors.total = revisionError;
+  }
 
   if (Object.keys(errors).length) return { errors };
   return {
@@ -89,6 +103,7 @@ export function getQuoteSubmissionErrors(error) {
   const { status, data } = error.response ?? {};
   if (status === 409) return { form: 'This auction is no longer accepting bids. The auction status is being refreshed.' };
   if (status === 404) return { form: 'This auction is no longer available.' };
+  if (status === 422 && data?.detail?.code === 'bid_total_not_lower') return { total: revisionError };
   if (status === 422 && typeof data?.detail === 'string') {
     if (data.detail.startsWith('supplier_id')) return { supplier_id: 'This supplier is no longer available. Select another supplier.' };
     if (data.detail.startsWith('valid_until')) return { valid_until: 'Quote validity must be in the future.' };

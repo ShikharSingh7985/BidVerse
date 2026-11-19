@@ -6,7 +6,7 @@ import { auctionReconcileInterval, auctionRefreshInterval, fetchRfq } from '../.
 import { secondaryButtonClass } from '../../components/buttonStyles.js';
 import { paths } from '../../paths.js';
 import { StatusBadge } from '../display.jsx';
-import AuctionFeeds from './AuctionFeeds.jsx';
+import AuctionFeeds, { useAuctionResource } from './AuctionFeeds.jsx';
 import AuctionOverview from './AuctionOverview.jsx';
 import useAuctionUpdates from './useAuctionUpdates.js';
 
@@ -28,6 +28,7 @@ export default function AuctionDetailsPage() {
   const notFound = !validId || query.error?.response?.status === 404;
   const rfq = notFound ? undefined : query.data?.rfq;
   const createdRfq = state?.createdRfq;
+  const bids = useAuctionResource(id, 'bids', refreshInterval, Boolean(rfq));
   useAuctionUpdates(rfq?.id, setConnectedRfqId);
 
   return (
@@ -77,8 +78,10 @@ export default function AuctionDetailsPage() {
           )}
           {rfq && (
             <div key={rfq.id} className="grid gap-4">
-              <AuctionOverview rfq={rfq} clockOffset={query.data.clockOffset} onBoundary={query.refetch} />
-              <AuctionFeeds rfqId={id} currency={rfq.currency} refreshInterval={refreshInterval} />
+              <AuctionOverview
+                rfq={rfq} clockOffset={query.data.clockOffset} onBoundary={query.refetch} bidHistory={bids.data}
+              />
+              <AuctionFeeds rfqId={id} currency={rfq.currency} refreshInterval={refreshInterval} bids={bids} />
             </div>
           )}
         </>

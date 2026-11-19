@@ -10,13 +10,18 @@ import DetailsPanel from './DetailsPanel.jsx';
 import {
   chargeFields,
   getBiddingBlockReason,
+  getPreviousTotal,
   getQuoteCharges,
   getQuoteSubmissionErrors,
   initialQuoteForm,
   validateQuote,
 } from './quoteForm.js';
 
-export default function AuctionQuoteForm({ rfq, clockOffset, blockReason }) {
+function focusQuoteError(form, errors) {
+  requestAnimationFrame(() => focusInvalidField(form, { ...errors, freight_charge: errors.freight_charge || errors.total }));
+}
+
+export default function AuctionQuoteForm({ rfq, clockOffset, blockReason, bidHistory = [] }) {
   const queryClient = useQueryClient();
   const [values, setValues] = useState(initialQuoteForm);
   const [validated, setValidated] = useState(false);
@@ -31,7 +36,9 @@ export default function AuctionQuoteForm({ rfq, clockOffset, blockReason }) {
   });
 
   const now = Date.now() + clockOffset;
-  const errors = { ...serverErrors, ...(validated ? validateQuote(values, suppliers, now).errors : {}) };
+  const previousTotal = getPreviousTotal(bidHistory, values.supplier_id);
+  const clientErrors = validated ? validateQuote(values, suppliers, now, previousTotal).errors : {};
+  const { total: totalError, form: formError, ...errors } = { ...serverErrors, ...clientErrors };
   const { total } = getQuoteCharges(values);
 
   function field(name) {
@@ -40,9 +47,13 @@ export default function AuctionQuoteForm({ rfq, clockOffset, blockReason }) {
       value: values[name],
       error: errors[name],
       onChange: (event) => {
+        if (mutation.isSuccess) mutation.reset();
         const value = event.target.value;
         setValues((current) => ({ ...current, [name]: value }));
-        setServerErrors((current) => ({ ...current, [name]: undefined, form: undefined }));
+        setServerErrors((current) => {
+          const affectsTotal = name === 'supplier_id' || chargeFields.some((charge) => charge.name === name);
+          return { ...current, [name]: undefined, form: undefined, total: affectsTotal ? undefined : current.total };
+        });
       },
     };
   }
@@ -62,9 +73,9 @@ export default function AuctionQuoteForm({ rfq, clockOffset, blockReason }) {
     setValidated(true);
     setServerErrors({});
     const form = event.currentTarget;
-    const { payload, errors: validationErrors } = validateQuote(values, suppliers, submittedAt);
+    const { payload, errors: validationErrors } = validateQuote(values, suppliers, submittedAt, previousTotal);
     if (!payload) {
-      requestAnimationFrame(() => focusInvalidField(form, validationErrors));
+      focusQuoteError(form, validationErrors);
       return;
     }
 
@@ -80,8 +91,9 @@ export default function AuctionQuoteForm({ rfq, clockOffset, blockReason }) {
       onError: (error) => {
         const apiErrors = getQuoteSubmissionErrors(error);
         setServerErrors(apiErrors);
-        requestAnimationFrame(() => focusInvalidField(form, apiErrors));
+        focusQuoteError(form, apiErrors);
         if (apiErrors.supplier_id) void supplierQuery.refetch();
+        if (apiErrors.total) void queryClient.invalidateQueries({ queryKey: ['rfqs', rfq.id, 'bids'], exact: true });
         if ([404, 409].includes(error.response?.status)) {
           void queryClient.invalidateQueries({ queryKey: ['rfqs', rfq.id], exact: true });
         }
@@ -97,9 +109,9 @@ export default function AuctionQuoteForm({ rfq, clockOffset, blockReason }) {
             Quote submitted successfully as bid #{mutation.data.id}.
           </p>
         )}
-        {!mutation.isPending && Object.values(errors).some(Boolean) && (
+        {!mutation.isPending && (formError || Object.values(errors).some(Boolean)) && (
           <p role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-            {errors.form || 'Fix the highlighted fields and try again.'}
+            {formError || 'Fix the highlighted fields and try again.'}
           </p>
         )}
         {blockReason ? (
@@ -146,6 +158,14 @@ export default function AuctionQuoteForm({ rfq, clockOffset, blockReason }) {
               <output aria-label="Calculated total" className="mt-0.5 block wrap-anywhere font-semibold tabular-nums">
                 {total === null ? '—' : formatMoney(total, rfq.currency)}
               </output>
+              {previousTotal !== undefined && (
+                <p className="mt-1 wrap-anywhere text-xs text-muted">
+                  Previous accepted total {formatMoney(previousTotal, rfq.currency)}
+                </p>
+              )}
+              {!mutation.isPending && totalError && (
+                <p role="alert" className="mt-1 wrap-anywhere text-sm text-red-700">{totalError}</p>
+              )}
             </div>
           )}
           <button
