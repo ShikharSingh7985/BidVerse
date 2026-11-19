@@ -2,14 +2,15 @@
 
 BidVerse is a freight RFQ and British Auction demo built with React, FastAPI, and PostgreSQL. Buyers create RFQs and configure bidding extensions. Suppliers submit and revise quotes while the auction is active. Both can follow rankings, deadlines, and activity as bids arrive.
 
-[High-level design, architecture diagram, database schema, and assignment review](docs/HLD.md)
+[High-level design, architecture diagram, and assignment review](HLD.md) · [Database schema design](Schema%20Design.md)
 
 ## Project structure
 
 ```text
 compose.yaml          Frontend, FastAPI, and PostgreSQL services
 .env.example          Local ports and database configuration
-docs/HLD.md           Architecture, schema design, and assignment review
+HLD.md                Architecture diagram and assignment review
+Schema Design.md      Database tables, relationships, and constraints
 frontend/
   Dockerfile          Builds React and serves it with Nginx
   nginx.conf          React routes and API/WebSocket proxy
